@@ -12,12 +12,16 @@ export interface AIStreamCallbacks {
 }
 
 export interface AIStreamParser {
-  (data: string): string | void
+  (data: string, isStream: boolean): string | void
 }
 
 export function createEventStreamTransformer(customParser: AIStreamParser) {
   const decoder = new TextDecoder()
   let parser: EventSourceParser
+
+  let isSSE = false;
+  let isFirstChunk = true;
+
 
   return new TransformStream<Uint8Array, string>({
     async start(controller): Promise<void> {
@@ -29,7 +33,12 @@ export function createEventStreamTransformer(customParser: AIStreamParser) {
             return
           }
 
-          const message = customParser(data)
+          if (isFirstChunk) {
+            isFirstChunk = false;
+            isSSE = data.startsWith('data: ');
+          }
+
+          const message = customParser(data, isSSE)
           if (message) controller.enqueue(message)
         }
       }
@@ -76,13 +85,17 @@ export function createCallbacksTransformer(
 // If we're still at the start of the stream, we want to trim the leading
 // `\n\n`. But, after we've seen some text, we no longer want to trim out
 // whitespace.
+
 export function trimStartOfStreamHelper() {
-  let start = true
+  let start = true;
   return (text: string) => {
-    if (start) text = text.trimStart()
-    if (text) start = false
-    return text
-  }
+    let trimmedText = text;
+    if (start) {
+      trimmedText = text.trimStart();
+      start = trimmedText.length > 0;
+    }
+    return trimmedText;
+  };
 }
 
 export function AIStream(
@@ -90,6 +103,7 @@ export function AIStream(
   customParser: AIStreamParser,
   callbacks?: AIStreamCallbacks
 ): ReadableStream {
+  console.log('res.body', res.body)
   const stream =
     res.body ||
     new ReadableStream({
