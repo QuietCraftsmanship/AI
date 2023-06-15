@@ -7,18 +7,18 @@
 
 ## `streamToResponse(stream: ReadableStream, response: ServerResponse, options?: Options)`
 
-This method will pipe a `ReadableStream` to a Node.js `ServerResponse` object. It can be helpful to combine this with other AI stream utilities, such as [`OpenAIStream`](/api-reference/openaistream#openaistream), in Node.js environments.
+This method will pipe a `ReadableStream` to a Node.js `ServerResponse` object. It can be helpful to combine this with other AI stream utilities, such as [`OpenAIStream`](/docs/api-reference/openai-stream#openaistream), in Node.js environments.
 
-Similar to [`StreamingTextResponse`](/api-reference/streaming-text-response#streamingtextresponse), it automatically sets the status code to `200` and the `Content-Type` header to `'text/plain; charset=utf-8'`.
+Similar to [`StreamingTextResponse`](/docs/api-reference/streaming-text-response#streamingtextresponse), it automatically sets the status code to `200` and the `Content-Type` header to `'text/plain; charset=utf-8'`.
 
-import { Callout } from 'nextra-theme-docs'
-import { OptionTable } from '@/components/table'
+import { Callout } from 'nextra-theme-docs';
+import { OptionTable } from '@/components/table';
 
 ## Parameters
 
 ### `stream: ReadableStream`
 
-The Web Stream to pipe to the response. It can be the return value of [`OpenAIStream`](/api-reference/openai-stream#openaistream), [`HuggingFaceStream`](/api-reference/huggingface-stream#huggingfacestream), [`AnthropicStream`](/api-reference/anthropic-stream#anthropicstream), or an [`AIStream`](/api-reference/ai-stream#aistream) instance.
+The Web Stream to pipe to the response. It can be the return value of [`OpenAIStream`](/docs/api-reference/openai-stream#openaistream), [`HuggingFaceStream`](/docs/api-reference/huggingface-stream#huggingface-stream), [`AnthropicStream`](/docs/api-reference/anthropic-stream#anthropic-stream), or an [`AIStream`](/docs/api-reference/ai-stream#ai-stream) instance.
 
 ### `response: ServerResponse`
 
@@ -33,13 +33,13 @@ Optional object to configure the response, with the following properties:
     [
       'status',
       'number',
-      'The status code to set on the response. Defaults to `200`.'
+      'The status code to set on the response. Defaults to `200`.',
     ],
     [
       'headers',
       'Record<string, string>',
-      "Additional headers to set on the response. Defaults to `{ 'Content-Type': 'text/plain; charset=utf-8' }`."
-    ]
+      "Additional headers to set on the response. Defaults to `{ 'Content-Type': 'text/plain; charset=utf-8' }`.",
+    ],
   ]}
 />
 
