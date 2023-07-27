@@ -4,6 +4,8 @@ import {
   type ParsedEvent,
   type ReconnectInterval
 } from 'eventsource-parser'
+import { Data } from './data-stream'
+import { getStreamString } from '../shared/utils'
 
 export interface FunctionCallPayload {
   name: string
@@ -18,6 +20,11 @@ export interface AIStreamCallbacks {
   onStart?: () => Promise<void> | void
   onCompletion?: (completion: string) => Promise<void> | void
   onToken?: (token: string) => Promise<void> | void
+  streamData?: Data
+}
+
+export interface AIStreamCallbacksAndOptions extends AIStreamCallbacks {
+  streamData?: Data
 }
 
 /**
@@ -54,7 +61,10 @@ export function createEventStreamTransformer(
 
           if ('data' in event) {
             const parsedMessage = customParser(event.data)
-            if (parsedMessage) controller.enqueue(parsedMessage)
+            if (parsedMessage)
+              controller.enqueue(
+                getStreamString('text', parsedMessage)
+              )
           }
         }
       )
@@ -75,7 +85,7 @@ export function createEventStreamTransformer(
  *
  * This function is useful when you want to process a stream of messages and perform specific actions during the stream's lifecycle.
  *
- * @param {AIStreamCallbacks} [callbacks] - An object containing the callback functions.
+ * @param {AIStreamCallbacksAndOptions} [callbacksAndOptions] - An object containing the callback functions.
  * @return {TransformStream<string, Uint8Array>} A transform stream that encodes input messages as Uint8Array and allows the execution of custom logic through callbacks.
  *
  * @example
@@ -86,8 +96,8 @@ export function createEventStreamTransformer(
  * };
  * const transformer = createCallbacksTransformer(callbacks);
  */
-export function createCallbacksTransformer(
-  callbacks: AIStreamCallbacks | undefined
+export function createCallbacksAndOptionsTransformer(
+  callbacks: AIStreamCallbacksAndOptions | undefined
 ): TransformStream<string, Uint8Array> {
   const textEncoder = new TextEncoder()
   let aggregatedResponse = ''
@@ -186,8 +196,14 @@ export function AIStream(
 
   return responseBodyStream
     .pipeThrough(createEventStreamTransformer(customParser))
-    .pipeThrough(createCallbacksTransformer(callbacks))
+    .pipeThrough(createCallbacksAndOptionsTransformer(callbacks))
 }
+
+// outputs lines like
+// 0: chunk
+// 0: more chunk
+// 1: a fct call
+// z: added data from Data
 
 /**
  * Creates an empty ReadableStream that immediately closes upon creation.
