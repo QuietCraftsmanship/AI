@@ -1,3 +1,7 @@
+
+import { CreateMessage, JSONValue } from '../shared/types'
+import { getStreamString } from '../shared/utils'
+
 import { formatStreamPart } from '../shared/stream-parts';
 import {
   CreateMessage,
@@ -7,9 +11,17 @@ import {
 } from '../shared/types';
 import { createChunkDecoder } from '../shared/utils';
 
+
 import {
   AIStream,
   trimStartOfStreamHelper,
+
+  type AIStreamCallbacks,
+  FunctionCallPayload
+} from './ai-stream'
+
+export type OpenAIStreamCallbacks = AIStreamCallbacks & {
+
   type AIStreamCallbacksAndOptions,
   FunctionCallPayload,
   readableFromAsyncIterable,
@@ -20,6 +32,7 @@ import { AzureChatCompletions } from './azure-openai-types';
 import { createStreamDataTransformer } from './stream-data';
 
 export type OpenAIStreamCallbacks = AIStreamCallbacksAndOptions & {
+
   /**
    * @example
    * ```js
@@ -660,6 +673,43 @@ function createFunctionCallTransformer(
               console.error('Error calling experimental_onToolCall:', e);
             }
           }
+
+        )
+
+        if (!functionResponse) {
+          // The user didn't do anything with the function call on the server and wants
+          // to either do nothing or run it on the client
+          // so we just return the function call as a message
+          controller.enqueue(
+            textEncoder.encode(
+              getStreamString('function_call', aggregatedResponse)
+            )
+          )
+          return
+        } else if (typeof functionResponse === 'string') {
+          // The user returned a string, so we just return it as a message
+          controller.enqueue(
+            textEncoder.encode(getStreamString('text', functionResponse))
+          )
+          return
+        }
+
+        // Recursively:
+
+        // We don't want to trigger onStart or onComplete recursively
+        // so we remove them from the callbacks
+        // see https://github.com/vercel-labs/ai/issues/351
+        const filteredCallbacks: OpenAIStreamCallbacks = {
+          ...callbacks,
+          onStart: undefined,
+          onCompletion: undefined
+        }
+
+        const openAIStream = OpenAIStream(functionResponse, {
+          ...filteredCallbacks,
+          [__internal__OpenAIFnMessagesSymbol]: newFunctionCallMessages
+        } as AIStreamCallbacks)
+
 
           if (!functionResponse) {
             // The user didn't do anything with the function call on the server and wants

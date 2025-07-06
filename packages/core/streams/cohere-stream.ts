@@ -1,9 +1,13 @@
+
+import { type AIStreamCallbacks, createCallbacksAndOptionsTransformer } from './ai-stream'
+=======
 import {
   type AIStreamCallbacksAndOptions,
   createCallbacksTransformer,
   readableFromAsyncIterable,
 } from './ai-stream';
 import { createStreamDataTransformer } from './stream-data';
+
 
 const utf8Decoder = new TextDecoder('utf-8');
 
@@ -90,6 +94,9 @@ export function CohereStream(
   reader: Response | AsyncIterable<StreamChunk>,
   callbacks?: AIStreamCallbacksAndOptions,
 ): ReadableStream {
+
+  return createParser(reader).pipeThrough(createCallbacksAndOptionsTransformer(callbacks))
+=======
   if (Symbol.asyncIterator in reader) {
     return readableFromAsyncIterable(streamable(reader))
       .pipeThrough(createCallbacksTransformer(callbacks))
@@ -103,4 +110,5 @@ export function CohereStream(
         createStreamDataTransformer(callbacks?.experimental_streamData),
       );
   }
+
 }

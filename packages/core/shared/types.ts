@@ -312,8 +312,13 @@ export type UseCompletionOptions = {
    * })
    * ```
    */
+
+  body?: object
+}
+=======
   body?: object;
 };
+
 
 export type JSONValue =
   | null
@@ -321,6 +326,9 @@ export type JSONValue =
   | number
   | boolean
   | { [x: string]: JSONValue }
+
+  | Array<JSONValue>
+=======
   | Array<JSONValue>;
 
 export type AssistantMessage = {
@@ -346,3 +354,4 @@ export type DataMessage = {
   role: 'data';
   data: JSONValue; // application-specific data
 };
+

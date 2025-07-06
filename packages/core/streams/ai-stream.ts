@@ -2,9 +2,16 @@ import {
   createParser,
   type EventSourceParser,
   type ParsedEvent,
+
+  type ReconnectInterval
+} from 'eventsource-parser'
+import { Data } from './data-stream'
+import { getStreamString } from '../shared/utils'
+=======
   type ReconnectInterval,
 } from 'eventsource-parser';
 import { OpenAIStreamCallbacks } from './openai-stream';
+
 
 export interface FunctionCallPayload {
   name: string;
@@ -25,6 +32,17 @@ export interface ToolCallPayload {
  * Configuration options and helper callback methods for AIStream stream lifecycle events.
  * @interface
  */
+
+export interface AIStreamCallbacks {
+  onStart?: () => Promise<void> | void
+  onCompletion?: (completion: string) => Promise<void> | void
+  onToken?: (token: string) => Promise<void> | void
+  streamData?: Data
+}
+
+export interface AIStreamCallbacksAndOptions extends AIStreamCallbacks {
+  streamData?: Data
+=======
 export interface AIStreamCallbacksAndOptions {
   /** `onStart`: Called once when the stream is initialized. */
   onStart?: () => Promise<void> | void;
@@ -52,6 +70,7 @@ export interface AIStreamCallbacksAndOptions {
  */
 export interface AIStreamParserOptions {
   event?: string;
+
 }
 
 /**
@@ -96,12 +115,20 @@ export function createEventStreamTransformer(
           }
 
           if ('data' in event) {
+
+            const parsedMessage = customParser(event.data)
+            if (parsedMessage)
+              controller.enqueue(
+                getStreamString('text', parsedMessage)
+              )
+
             const parsedMessage = customParser
               ? customParser(event.data, {
                   event: event.event,
                 })
               : event.data;
             if (parsedMessage) controller.enqueue(parsedMessage);
+
           }
         },
       );
@@ -123,7 +150,11 @@ export function createEventStreamTransformer(
  *
  * This function is useful when you want to process a stream of messages and perform specific actions during the stream's lifecycle.
  *
+
+ * @param {AIStreamCallbacksAndOptions} [callbacksAndOptions] - An object containing the callback functions.
+=======
  * @param {AIStreamCallbacksAndOptions} [callbacks] - An object containing the callback functions.
+
  * @return {TransformStream<string, Uint8Array>} A transform stream that encodes input messages as Uint8Array and allows the execution of custom logic through callbacks.
  *
  * @example
@@ -135,12 +166,21 @@ export function createEventStreamTransformer(
  * };
  * const transformer = createCallbacksTransformer(callbacks);
  */
+
+export function createCallbacksAndOptionsTransformer(
+  callbacks: AIStreamCallbacksAndOptions | undefined
+): TransformStream<string, Uint8Array> {
+  const textEncoder = new TextEncoder()
+  let aggregatedResponse = ''
+  const { onStart, onToken, onCompletion } = callbacks || {}
+=======
 export function createCallbacksTransformer(
   cb: AIStreamCallbacksAndOptions | OpenAIStreamCallbacks | undefined,
 ): TransformStream<string | { isText: false; content: string }, Uint8Array> {
   const textEncoder = new TextEncoder();
   let aggregatedResponse = '';
   const callbacks = cb || {};
+
 
   return new TransformStream({
     async start(): Promise<void> {
@@ -268,7 +308,11 @@ export function AIStream(
 
   return responseBodyStream
     .pipeThrough(createEventStreamTransformer(customParser))
+
+    .pipeThrough(createCallbacksAndOptionsTransformer(callbacks))
+
     .pipeThrough(createCallbacksTransformer(callbacks));
+
 }
 
 // outputs lines like
