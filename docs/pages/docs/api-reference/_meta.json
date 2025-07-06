@@ -1,0 +1,13 @@
+{
+  "generative-ui": "Generative UI",
+  "providers": "Providers",
+  "use-assistant": "experimental_useAssistant",
+  "use-chat": "useChat",
+  "use-completion": "useCompletion",
+  "ai-stream": "AIStream",
+  "stream-data": "experimental_StreamData",
+  "streaming-text-response": "StreamingTextResponse",
+  "stream-to-response": "streamToResponse",
+  "assistant-response": "experimental_AssistantResponse",
+  "tokens": "<Tokens />"
+}

@@ -1,101 +1,146 @@
-import { useSWR } from 'sswr'
-import { Readable, get, readable, writable } from 'svelte/store'
-
-import type { Message, CreateMessage } from '../shared/types'
-import { Writable } from 'svelte/store'
-import { decodeAIStreamChunk, nanoid } from '../shared/utils'
-
-export type { Message, CreateMessage }
-
-export type UseChatOptions = {
-  /**
-   * The API endpoint that accepts a `{ messages: Message[] }` object and returns
-   * a stream of tokens of the AI chat response. Defaults to `/api/chat`.
-   */
-  api?: string
-
-  /**
-   * An unique identifier for the chat. If not provided, a random one will be
-   * generated. When provided, the `useChat` hook with the same `id` will
-   * have shared states across components.
-   */
-  id?: string
-
-  /**
-   * Initial messages of the chat. Useful to load an existing chat history.
-   */
-  initialMessages?: Message[]
-
-  /**
-   * Initial input of the chat.
-   */
-  initialInput?: string
-
-  /**
-   * Callback function to be called when the API response is received.
-   */
-  onResponse?: (response: Response) => void
-
-  /**
-   * Callback function to be called when the chat is finished streaming.
-   */
-  onFinish?: (message: Message) => void
-
-  /**
-   * HTTP headers to be sent with the API request.
-   */
-  headers?: Record<string, string> | Headers
-
-  /**
-   * Extra body to be sent with the API request.
-   */
-  body?: any
-
-  /**
-   * Whether to send extra message fields such as `message.id` and `message.createdAt` to the API.
-   * Defaults to `false`. When set to `true`, the API endpoint might need to
-   * handle the extra fields before forwarding the request to the AI service.
-   */
-  sendExtraMessageFields?: boolean
-}
+import { useSWR } from 'sswr';
+import { Readable, Writable, derived, get, writable } from 'svelte/store';
+import { callChatApi } from '../shared/call-chat-api';
+import { processChatStream } from '../shared/process-chat-stream';
+import type {
+  ChatRequest,
+  ChatRequestOptions,
+  CreateMessage,
+  IdGenerator,
+  JSONValue,
+  Message,
+  UseChatOptions,
+} from '../shared/types';
+import { nanoid } from '../shared/utils';
+export type { CreateMessage, Message, UseChatOptions };
 
 export type UseChatHelpers = {
   /** Current messages in the chat */
-  messages: Readable<Message[]>
+  messages: Readable<Message[]>;
   /** The error object of the API request */
-  error: Readable<undefined | Error>
+  error: Readable<undefined | Error>;
   /**
    * Append a user message to the chat list. This triggers the API call to fetch
    * the assistant's response.
+   * @param message The message to append
+   * @param chatRequestOptions Additional options to pass to the API call
    */
-  append: (message: Message | CreateMessage) => void
+  append: (
+    message: Message | CreateMessage,
+    chatRequestOptions?: ChatRequestOptions,
+  ) => Promise<string | null | undefined>;
   /**
    * Reload the last AI chat response for the given chat history. If the last
    * message isn't from the assistant, it will request the API to generate a
    * new response.
    */
-  reload: () => void
+  reload: (
+    chatRequestOptions?: ChatRequestOptions,
+  ) => Promise<string | null | undefined>;
   /**
    * Abort the current request immediately, keep the generated tokens if any.
    */
-  stop: () => void
+  stop: () => void;
   /**
    * Update the `messages` state locally. This is useful when you want to
    * edit the messages on the client, and then trigger the `reload` method
    * manually to regenerate the AI response.
    */
-  setMessages: (messages: Message[]) => void
+  setMessages: (messages: Message[]) => void;
   /** The current value of the input */
-  input: Writable<string>
-  /** Form submission handler to automattically reset input and append a user message  */
-  handleSubmit: (e: any) => void
+  input: Writable<string>;
+  /** Form submission handler to automatically reset input and append a user message  */
+  handleSubmit: (e: any, chatRequestOptions?: ChatRequestOptions) => void;
+  metadata?: Object;
   /** Whether the API request is in progress */
-  isLoading: Writable<boolean>
-}
+  isLoading: Readable<boolean | undefined>;
 
-let uniqueId = 0
+  /** Additional data added on the server via StreamData */
+  data: Readable<JSONValue[] | undefined>;
+};
+const getStreamedResponse = async (
+  api: string,
+  chatRequest: ChatRequest,
+  mutate: (messages: Message[]) => void,
+  mutateStreamData: (data: JSONValue[] | undefined) => void,
+  existingData: JSONValue[] | undefined,
+  extraMetadata: {
+    credentials?: RequestCredentials;
+    headers?: Record<string, string> | Headers;
+    body?: any;
+  },
+  previousMessages: Message[],
+  abortControllerRef: AbortController | null,
+  generateId: IdGenerator,
+  onFinish?: (message: Message) => void,
+  onResponse?: (response: Response) => void | Promise<void>,
+  sendExtraMessageFields?: boolean,
+) => {
+  // Do an optimistic update to the chat state to show the updated messages
+  // immediately.
+  mutate(chatRequest.messages);
 
-const store: Record<string, any> = {}
+  const constructedMessagesPayload = sendExtraMessageFields
+    ? chatRequest.messages
+    : chatRequest.messages.map(
+        ({ role, content, name, function_call, tool_calls, tool_call_id }) => ({
+          role,
+          content,
+          tool_call_id,
+          ...(name !== undefined && { name }),
+          ...(function_call !== undefined && {
+            function_call: function_call,
+          }),
+          ...(tool_calls !== undefined && {
+            tool_calls: tool_calls,
+          }),
+        }),
+      );
+
+  return await callChatApi({
+    api,
+    messages: constructedMessagesPayload,
+    body: {
+      ...extraMetadata.body,
+      ...chatRequest.options?.body,
+      ...(chatRequest.functions !== undefined && {
+        functions: chatRequest.functions,
+      }),
+      ...(chatRequest.function_call !== undefined && {
+        function_call: chatRequest.function_call,
+      }),
+      ...(chatRequest.tools !== undefined && {
+        tools: chatRequest.tools,
+      }),
+      ...(chatRequest.tool_choice !== undefined && {
+        tool_choice: chatRequest.tool_choice,
+      }),
+    },
+    credentials: extraMetadata.credentials,
+    headers: {
+      ...extraMetadata.headers,
+      ...chatRequest.options?.headers,
+    },
+    abortController: () => abortControllerRef,
+    appendMessage(message) {
+      mutate([...chatRequest.messages, message]);
+    },
+    restoreMessagesOnFailure() {
+      mutate(previousMessages);
+    },
+    onResponse,
+    onUpdate(merged, data) {
+      mutate([...chatRequest.messages, ...merged]);
+      mutateStreamData([...(existingData || []), ...(data || [])]);
+    },
+    onFinish,
+    generateId,
+  });
+};
+
+let uniqueId = 0;
+
+const store: Record<string, Message[] | undefined> = {};
 
 export function useChat({
   api = '/api/chat',
@@ -103,184 +148,216 @@ export function useChat({
   initialMessages = [],
   initialInput = '',
   sendExtraMessageFields,
+  experimental_onFunctionCall,
+  experimental_onToolCall,
   onResponse,
   onFinish,
+  onError,
+  credentials,
   headers,
-  body
+  body,
+  generateId = nanoid,
 }: UseChatOptions = {}): UseChatHelpers {
-  // Generate a unique ID for the chat if not provided.
-  const chatId = id || `chat-${uniqueId++}`
+  // Generate a unique id for the chat if not provided.
+  const chatId = id || `chat-${uniqueId++}`;
 
-  const key = `${api}|${chatId}`
-  const { data, mutate: originalMutate } = useSWR<Message[]>(key, {
+  const key = `${api}|${chatId}`;
+  const {
+    data,
+    mutate: originalMutate,
+    isLoading: isSWRLoading,
+  } = useSWR<Message[]>(key, {
     fetcher: () => store[key] || initialMessages,
-    initialData: initialMessages
-  })
+    fallbackData: initialMessages,
+  });
+
+  const streamData = writable<JSONValue[] | undefined>(undefined);
+
+  const loading = writable<boolean>(false);
+
   // Force the `data` to be `initialMessages` if it's `undefined`.
-  data.set(initialMessages)
+  data.set(initialMessages);
 
   const mutate = (data: Message[]) => {
-    store[key] = data
-    return originalMutate(data)
-  }
+    store[key] = data;
+    return originalMutate(data);
+  };
 
-  // Because of the `initialData` option, the `data` will never be `undefined`.
-  const messages = data as Writable<Message[]>
+  // Because of the `fallbackData` option, the `data` will never be `undefined`.
+  const messages = data as Writable<Message[]>;
 
-  const error = writable<undefined | Error>(undefined)
-  const isLoading = writable(false)
+  // Abort controller to cancel the current API call.
+  let abortController: AbortController | null = null;
 
-  let abortController: AbortController | null = null
-  async function triggerRequest(messagesSnapshot: Message[]) {
+  const extraMetadata = {
+    credentials,
+    headers,
+    body,
+  };
+
+  const error = writable<undefined | Error>(undefined);
+
+  // Actual mutation hook to send messages to the API endpoint and update the
+  // chat state.
+  async function triggerRequest(chatRequest: ChatRequest) {
     try {
-      isLoading.set(true)
-      abortController = new AbortController()
+      error.set(undefined);
+      loading.set(true);
+      abortController = new AbortController();
 
-      // Do an optimistic update to the chat state to show the updated messages
-      // immediately.
-      const previousMessages = get(messages)
-      mutate(messagesSnapshot)
+      await processChatStream({
+        getStreamedResponse: () =>
+          getStreamedResponse(
+            api,
+            chatRequest,
+            mutate,
+            data => {
+              streamData.set(data);
+            },
+            get(streamData),
+            extraMetadata,
+            get(messages),
+            abortController,
+            generateId,
+            onFinish,
+            onResponse,
+            sendExtraMessageFields,
+          ),
+        experimental_onFunctionCall,
+        experimental_onToolCall,
+        updateChatRequest: chatRequestParam => {
+          chatRequest = chatRequestParam;
+        },
+        getCurrentMessages: () => get(messages),
+      });
 
-      const res = await fetch(api, {
-        method: 'POST',
-        body: JSON.stringify({
-          messages: sendExtraMessageFields
-            ? messagesSnapshot
-            : messagesSnapshot.map(({ role, content }) => ({
-                role,
-                content
-              })),
-          ...body
-        }),
-        headers: headers || {},
-        signal: abortController.signal
-      }).catch(err => {
-        // Restore the previous messages if the request fails.
-        mutate(previousMessages)
-        throw err
-      })
+      abortController = null;
 
-      if (onResponse) {
-        try {
-          await onResponse(res)
-        } catch (err) {
-          throw err
-        }
-      }
-
-      if (!res.ok) {
-        // Restore the previous messages if the request fails.
-        mutate(previousMessages)
-        throw new Error('Failed to fetch the chat response.')
-      }
-      if (!res.body) {
-        throw new Error('The response body is empty.')
-      }
-
-      let result = ''
-      const createdAt = new Date()
-      const replyId = nanoid()
-      const reader = res.body.getReader()
-
-      while (true) {
-        const { done, value } = await reader.read()
-        if (done) {
-          break
-        }
-        // Update the chat state with the new message tokens.
-        result += decodeAIStreamChunk(value)
-        mutate([
-          ...messagesSnapshot,
-          {
-            id: replyId,
-            createdAt,
-            content: result,
-            role: 'assistant'
-          }
-        ])
-
-        // The request has been aborted, stop reading the stream.
-        if (abortController === null) {
-          reader.cancel()
-          break
-        }
-      }
-
-      if (onFinish) {
-        onFinish({
-          id: replyId,
-          createdAt,
-          content: result,
-          role: 'assistant'
-        })
-      }
-
-      abortController = null
-      return result
+      return null;
     } catch (err) {
       // Ignore abort errors as they are expected.
       if ((err as any).name === 'AbortError') {
-        abortController = null
-        return null
+        abortController = null;
+        return null;
       }
 
-      error.set(err as Error)
+      if (onError && err instanceof Error) {
+        onError(err);
+      }
+
+      error.set(err as Error);
     } finally {
-      isLoading.set(false)
+      loading.set(false);
     }
   }
 
-  const append = async (message: Message | CreateMessage) => {
+  const append: UseChatHelpers['append'] = async (
+    message: Message | CreateMessage,
+    {
+      options,
+      functions,
+      function_call,
+      tools,
+      tool_choice,
+    }: ChatRequestOptions = {},
+  ) => {
     if (!message.id) {
-      message.id = nanoid()
+      message.id = generateId();
     }
-    return triggerRequest(get(messages).concat(message as Message))
-  }
 
-  const reload = async () => {
-    const messagesSnapshot = get(messages)
-    if (messagesSnapshot.length === 0) return null
+    const chatRequest: ChatRequest = {
+      messages: get(messages).concat(message as Message),
+      options,
+      ...(functions !== undefined && { functions }),
+      ...(function_call !== undefined && { function_call }),
+      ...(tools !== undefined && { tools }),
+      ...(tool_choice !== undefined && { tool_choice }),
+    };
+    return triggerRequest(chatRequest);
+  };
 
-    const lastMessage = messagesSnapshot[messagesSnapshot.length - 1]
-    if (lastMessage.role === 'assistant') {
-      return triggerRequest(messagesSnapshot.slice(0, -1))
+  const reload: UseChatHelpers['reload'] = async ({
+    options,
+    functions,
+    function_call,
+    tools,
+    tool_choice,
+  }: ChatRequestOptions = {}) => {
+    const messagesSnapshot = get(messages);
+    if (messagesSnapshot.length === 0) return null;
+
+    // Remove last assistant message and retry last user message.
+    const lastMessage = messagesSnapshot.at(-1);
+    if (lastMessage?.role === 'assistant') {
+      const chatRequest: ChatRequest = {
+        messages: messagesSnapshot.slice(0, -1),
+        options,
+        ...(functions !== undefined && { functions }),
+        ...(function_call !== undefined && { function_call }),
+        ...(tools !== undefined && { tools }),
+        ...(tool_choice !== undefined && { tool_choice }),
+      };
+
+      return triggerRequest(chatRequest);
     }
-    return triggerRequest(messagesSnapshot)
-  }
+    const chatRequest: ChatRequest = {
+      messages: messagesSnapshot,
+      options,
+      ...(functions !== undefined && { functions }),
+      ...(function_call !== undefined && { function_call }),
+      ...(tools !== undefined && { tools }),
+      ...(tool_choice !== undefined && { tool_choice }),
+    };
+
+    return triggerRequest(chatRequest);
+  };
 
   const stop = () => {
     if (abortController) {
-      abortController.abort()
-      abortController = null
+      abortController.abort();
+      abortController = null;
     }
-  }
+  };
 
   const setMessages = (messages: Message[]) => {
-    mutate(messages)
-  }
+    mutate(messages);
+  };
 
-  const input = writable(initialInput)
+  const input = writable(initialInput);
 
-  const handleSubmit = (e: any) => {
-    e.preventDefault()
-    const inputValue = get(input)
-    if (!inputValue) return
-    append({
-      content: inputValue,
-      role: 'user'
-    })
-    input.set('')
-  }
+  const handleSubmit = (e: any, options: ChatRequestOptions = {}) => {
+    e.preventDefault();
+    const inputValue = get(input);
+    if (!inputValue) return;
+
+    append(
+      {
+        content: inputValue,
+        role: 'user',
+        createdAt: new Date(),
+      },
+      options,
+    );
+    input.set('');
+  };
+
+  const isLoading = derived(
+    [isSWRLoading, loading],
+    ([$isSWRLoading, $loading]) => {
+      return $isSWRLoading || $loading;
+    },
+  );
 
   return {
     messages,
-    append,
     error,
+    append,
     reload,
     stop,
     setMessages,
     input,
     handleSubmit,
-    isLoading
-  }
+    isLoading,
+    data: streamData,
+  };
 }
