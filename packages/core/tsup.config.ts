@@ -70,4 +70,23 @@ export default defineConfig([
     dts: true,
     sourcemap: true,
   },
+  // RSC APIs - shared client
+  {
+    // Entry is `.mts` as the entrypoints that import it will be ESM so it needs exact imports that includes the `.mjs` extension.
+    entry: ['rsc/rsc-shared.mts'],
+    outDir: 'rsc/dist',
+    format: ['esm'],
+    external: ['react', 'zod'],
+    dts: true,
+    sourcemap: true,
+  },
+  // RSC APIs - server, client, types
+  {
+    entry: ['rsc/rsc-server.ts', 'rsc/rsc-client.ts', 'rsc/rsc-types.ts'],
+    outDir: 'rsc/dist',
+    format: ['esm'],
+    external: ['react', 'zod', /\/rsc-shared/],
+    dts: true,
+    sourcemap: true,
+  },
 ]);

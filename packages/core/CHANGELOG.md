@@ -1,5 +1,84 @@
 # ai
 
+## 3.0.4
+
+### Patch Changes
+
+- 7962862: fix `useActions` type inference
+- aab5324: Revert "fix(render): parse the args based on the zod schema"
+- fe55612: Bump OpenAI dependency to 4.28.4; fix type error in render
+
+## 3.0.3
+
+### Patch Changes
+
+- 4d816ca: fix(render): parse the args based on the zod schema
+- d158a47: fix potential race conditions
+
+## 3.0.2
+
+### Patch Changes
+
+- 73bd06e: fix(useActions): return typed object
+
+## 3.0.1
+
+### Patch Changes
+
+- ac20a25: ai/rsc: fix text response and async generator
+- b88778f: Added onText callback for text tokens.
+
+## 3.0.0
+
+### Major Changes
+
+- 51054a9: add ai/rsc
+
+## 2.2.37
+
+### Patch Changes
+
+- a6b5764: Add support for Mistral's JavaScript SDK
+
+## 2.2.36
+
+### Patch Changes
+
+- 141f0ce: Fix: onFinal callback is invoked with text from onToolCall when onToolCall returns string
+
+## 2.2.35
+
+### Patch Changes
+
+- b717dad: Adding Inkeep as a stream provider
+
+## 2.2.34
+
+### Patch Changes
+
+- 2c8ffdb: cohere-stream: support AsyncIterable
+- ed1e278: Message annotations handling for all Message types
+
+## 2.2.33
+
+### Patch Changes
+
+- 8542ae7: react/use-assistant: add onError handler
+- 97039ff: OpenAIStream: Add support for the Azure OpenAI client library
+
+## 2.2.32
+
+### Patch Changes
+
+- 7851fa0: StreamData: add `annotations` and `appendMessageAnnotation` support
+
+## 2.2.31
+
+### Patch Changes
+
+- 9b89c4d: react/use-assistant: Expose setInput
+- 75751c9: ai/react: Add experimental_onToolCall to useChat.
+
 ## 2.2.30
 
 ### Patch Changes

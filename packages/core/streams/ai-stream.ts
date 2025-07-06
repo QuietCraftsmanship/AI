@@ -2,9 +2,16 @@ import {
   createParser,
   type EventSourceParser,
   type ParsedEvent,
+
+  type ReconnectInterval
+} from 'eventsource-parser'
+import { Data } from './data-stream'
+import { getStreamString } from '../shared/utils'
+=======
   type ReconnectInterval,
 } from 'eventsource-parser';
 import { OpenAIStreamCallbacks } from './openai-stream';
+
 
 export interface FunctionCallPayload {
   name: string;
@@ -25,6 +32,17 @@ export interface ToolCallPayload {
  * Configuration options and helper callback methods for AIStream stream lifecycle events.
  * @interface
  */
+
+export interface AIStreamCallbacks {
+  onStart?: () => Promise<void> | void
+  onCompletion?: (completion: string) => Promise<void> | void
+  onToken?: (token: string) => Promise<void> | void
+  streamData?: Data
+}
+
+export interface AIStreamCallbacksAndOptions extends AIStreamCallbacks {
+  streamData?: Data
+
 export interface AIStreamCallbacksAndOptions {
   /** `onStart`: Called once when the stream is initialized. */
   onStart?: () => Promise<void> | void;
@@ -34,6 +52,8 @@ export interface AIStreamCallbacksAndOptions {
   onFinal?: (completion: string) => Promise<void> | void;
   /** `onToken`: Called for each tokenized message. */
   onToken?: (token: string) => Promise<void> | void;
+  /** `onText`: Called for each text chunk. */
+  onText?: (text: string) => Promise<void> | void;
   /**
    * A flag for enabling the experimental_StreamData class and the new protocol.
    * @see https://github.com/vercel-labs/ai/pull/425
@@ -50,6 +70,7 @@ export interface AIStreamCallbacksAndOptions {
  */
 export interface AIStreamParserOptions {
   event?: string;
+
 }
 
 /**
@@ -60,7 +81,14 @@ export interface AIStreamParserOptions {
  * @returns {string | void} The parsed data or void.
  */
 export interface AIStreamParser {
+
   (data: string, options: AIStreamParserOptions): string | void;
+
+  (data: string, options: AIStreamParserOptions):
+    | string
+    | void
+    | { isText: false; content: string };
+
 }
 
 /**
@@ -70,7 +98,7 @@ export interface AIStreamParser {
  */
 export function createEventStreamTransformer(
   customParser?: AIStreamParser,
-): TransformStream<Uint8Array, string> {
+): TransformStream<Uint8Array, string | { isText: false; content: string }> {
   const textDecoder = new TextDecoder();
   let eventSourceParser: EventSourceParser;
 
@@ -91,12 +119,25 @@ export function createEventStreamTransformer(
           }
 
           if ('data' in event) {
+
+            const parsedMessage = customParser(event.data)
+            if (parsedMessage)
+              controller.enqueue(
+                getStreamString('text', parsedMessage)
+              )
+
             const parsedMessage = customParser
               ? customParser(event.data, {
+
                 event: event.event
               })
+
+                  event: event.event,
+                })
+
               : event.data;
             if (parsedMessage) controller.enqueue(parsedMessage);
+
           }
         },
       );
@@ -118,7 +159,11 @@ export function createEventStreamTransformer(
  *
  * This function is useful when you want to process a stream of messages and perform specific actions during the stream's lifecycle.
  *
+
+ * @param {AIStreamCallbacksAndOptions} [callbacksAndOptions] - An object containing the callback functions.
+=======
  * @param {AIStreamCallbacksAndOptions} [callbacks] - An object containing the callback functions.
+
  * @return {TransformStream<string, Uint8Array>} A transform stream that encodes input messages as Uint8Array and allows the execution of custom logic through callbacks.
  *
  * @example
@@ -130,12 +175,21 @@ export function createEventStreamTransformer(
  * };
  * const transformer = createCallbacksTransformer(callbacks);
  */
+
+export function createCallbacksAndOptionsTransformer(
+  callbacks: AIStreamCallbacksAndOptions | undefined
+): TransformStream<string, Uint8Array> {
+  const textEncoder = new TextEncoder()
+  let aggregatedResponse = ''
+  const { onStart, onToken, onCompletion } = callbacks || {}
+=======
 export function createCallbacksTransformer(
   cb: AIStreamCallbacksAndOptions | OpenAIStreamCallbacks | undefined,
-): TransformStream<string, Uint8Array> {
+): TransformStream<string | { isText: false; content: string }, Uint8Array> {
   const textEncoder = new TextEncoder();
   let aggregatedResponse = '';
   const callbacks = cb || {};
+
 
   return new TransformStream({
     async start(): Promise<void> {
@@ -143,10 +197,16 @@ export function createCallbacksTransformer(
     },
 
     async transform(message, controller): Promise<void> {
-      controller.enqueue(textEncoder.encode(message));
+      const content = typeof message === 'string' ? message : message.content;
 
-      aggregatedResponse += message;
-      if (callbacks.onToken) await callbacks.onToken(message);
+      controller.enqueue(textEncoder.encode(content));
+
+      aggregatedResponse += content;
+
+      if (callbacks.onToken) await callbacks.onToken(content);
+      if (callbacks.onText && typeof message === 'string') {
+        await callbacks.onText(message);
+      }
     },
 
     async flush(): Promise<void> {
@@ -164,6 +224,19 @@ export function createCallbacksTransformer(
   });
 }
 
+// If we're still at the start of the stream, we want to trim the leading
+// `\n\n`. But, after we've seen some text, we no longer want to trim out
+// whitespace.
+export function trimStartOfStreamHelper() {
+  let start = true
+  return (text: string) => {
+    let trimmedText = text
+    if (start) {
+      trimmedText = text.trimStart()
+      start = trimmedText.length > 0
+    }
+    return trimmedText
+  }
 function isOfTypeOpenAIStreamCallbacks(
   callbacks: AIStreamCallbacksAndOptions | OpenAIStreamCallbacks,
 ): callbacks is OpenAIStreamCallbacks {
@@ -244,7 +317,11 @@ export function AIStream(
 
   return responseBodyStream
     .pipeThrough(createEventStreamTransformer(customParser))
+
+    .pipeThrough(createCallbacksAndOptionsTransformer(callbacks))
+
     .pipeThrough(createCallbacksTransformer(callbacks));
+
 }
 
 // outputs lines like

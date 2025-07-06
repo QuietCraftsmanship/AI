@@ -1,6 +1,6 @@
 {
   "name": "ai",
-  "version": "2.2.30",
+  "version": "3.0.4",
   "license": "Apache-2.0",
   "sideEffects": false,
   "main": "./dist/index.js",
@@ -12,11 +12,12 @@
     "svelte/dist/**/*",
     "vue/dist/**/*",
     "solid/dist/**/*",
-    "prompts/dist/**/*"
+    "prompts/dist/**/*",
+    "rsc/dist/**/*"
   ],
   "scripts": {
     "build": "tsup && cat react/dist/index.server.d.ts >> react/dist/index.d.ts",
-    "clean": "rm -rf dist && rm -rf react/dist && rm -rf svelte/dist && rm -rf vue/dist && rm -rf solid/dist",
+    "clean": "rm -rf dist && rm -rf react/dist && rm -rf svelte/dist && rm -rf vue/dist && rm -rf solid/dist && rm -rf rsc/dist",
     "dev": "tsup --watch",
     "lint": "eslint \"./**/*.ts*\"",
     "type-check": "tsc --noEmit",
@@ -41,6 +42,12 @@
       "import": "./dist/index.mjs",
       "module": "./dist/index.mjs",
       "require": "./dist/index.js"
+    },
+    "./rsc": {
+      "types": "./rsc/dist/rsc-types.d.ts",
+      "react-server": "./rsc/dist/rsc-server.mjs",
+      "import": "./rsc/dist/rsc-client.mjs",
+      "module": "./rsc/dist/rsc-client.mjs"
     },
     "./prompts": {
       "types": "./prompts/dist/index.d.ts",
@@ -76,12 +83,14 @@
   },
   "dependencies": {
     "eventsource-parser": "1.0.0",
+    "jsondiffpatch": "^0.6.0",
     "nanoid": "3.3.6",
     "solid-swr-store": "0.10.7",
     "sswr": "2.0.0",
     "swr": "2.2.0",
     "swr-store": "0.10.6",
-    "swrv": "1.0.4"
+    "swrv": "1.0.4",
+    "zod-to-json-schema": "^3.22.4"
   },
   "devDependencies": {
     "@anthropic-ai/sdk": "0.12.0",
@@ -89,7 +98,7 @@
     "@edge-runtime/vm": "^3.1.7",
     "@google/generative-ai": "0.1.1",
     "@huggingface/inference": "2.6.4",
-    "@mistralai/mistralai": "0.0.7",
+    "@mistralai/mistralai": "0.1.3",
     "@solidjs/testing-library": "0.8.4",
     "@testing-library/jest-dom": "^6.1.4",
     "@testing-library/react": "^14.0.0",
@@ -101,12 +110,13 @@
     "@vercel/ai-tsconfig": "workspace:*",
     "@vitejs/plugin-react": "4.2.0",
     "@vitejs/plugin-vue": "4.5.0",
+    "cohere-ai": "^7.6.2",
     "eslint": "^7.32.0",
     "eslint-config-vercel-ai": "workspace:*",
     "jsdom": "^23.0.0",
     "langchain": "0.0.196",
     "msw": "2.0.9",
-    "openai": "4.17.4",
+    "openai": "4.28.4",
     "react-dom": "^18.2.0",
     "solid-js": "^1.8.7",
     "tsup": "^6.7.0",
@@ -117,7 +127,8 @@
     "react": "^18.2.0",
     "solid-js": "^1.7.7",
     "svelte": "^3.0.0 || ^4.0.0",
-    "vue": "^3.3.4"
+    "vue": "^3.3.4",
+    "zod": "^3.0.0"
   },
   "peerDependenciesMeta": {
     "react": {
@@ -130,6 +141,9 @@
       "optional": true
     },
     "solid-js": {
+      "optional": true
+    },
+    "zod": {
       "optional": true
     }
   },
