@@ -112,7 +112,10 @@ export interface Message {
   tool_calls?: string | ToolCall[];
 
   /**
-   * Additional message-specific information added on the server via StreamData
+
+   * Additional message-specific information added on the server via StreamData 
+  * Additional message-specific information added on the server via StreamData
+
    */
   annotations?: JSONValue[] | undefined;
 }
@@ -315,7 +318,7 @@ export type UseCompletionOptions = {
 
   body?: object
 }
-=======
+
   body?: object;
 };
 
@@ -328,7 +331,7 @@ export type JSONValue =
   | { [x: string]: JSONValue }
 
   | Array<JSONValue>
-=======
+
   | Array<JSONValue>;
 
 export type AssistantMessage = {

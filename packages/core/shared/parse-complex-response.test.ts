@@ -231,8 +231,13 @@ describe('parseComplexResponse function', () => {
     // Execute the parser function
     const result = await parseComplexResponse({
       reader: createTestReader([
+
+        '0:"Sample text message."\n',
+        '8:[{"key":"value"}, 2]\n',
+
         '8:[{"key":"value"}, 2]\n',
         '0:"Sample text message."\n',
+
       ]),
       abortControllerRef: { current: new AbortController() },
       update: mockUpdate,
@@ -243,7 +248,13 @@ describe('parseComplexResponse function', () => {
     // check the mockUpdate call:
     expect(mockUpdate).toHaveBeenCalledTimes(2);
 
+
+    expect(mockUpdate.mock.calls[0][0]).toEqual([
+      assistantTextMessage('Sample text message.'),
+    ]);
+
     expect(mockUpdate.mock.calls[0][0]).toEqual([]);
+
 
     expect(mockUpdate.mock.calls[1][0]).toEqual([
       {
@@ -263,6 +274,8 @@ describe('parseComplexResponse function', () => {
       data: [],
     });
   });
+
+
 
   it('should parse a combination of a function_call and message annotations', async () => {
     const mockUpdate = vi.fn();
@@ -350,4 +363,5 @@ describe('parseComplexResponse function', () => {
       data: [],
     });
   });
+
 });

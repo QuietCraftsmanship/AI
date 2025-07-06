@@ -15,12 +15,29 @@ type PrefixMap = {
   data: JSONValue[];
 };
 
+
+function initializeMessage({
+  generateId,
+  ...rest
+}: {
+  generateId: () => string;
+  content: string;
+  createdAt: Date;
+    annotations?: JSONValue[];
+}): Message {
+  return {
+    id: generateId(),
+    role: 'assistant',
+    ...rest
+  };
+
 function assignAnnotationsToMessage<T extends Message | null | undefined>(
   message: T,
   annotations: JSONValue[] | undefined,
 ): T {
   if (!message || !annotations || !annotations.length) return message;
   return { ...message, annotations: [...annotations] } as T;
+
 }
 
 export async function parseComplexResponse({
@@ -63,7 +80,24 @@ export async function parseComplexResponse({
           id: generateId(),
           role: 'assistant',
           content: value,
-          createdAt,
+          createdAt
+        };
+      }
+    }
+
+    if (type == 'message_annotations') {
+      if (prefixMap['text']) {
+        prefixMap['text'] = {
+          ...prefixMap['text'],
+          annotations: [...prefixMap['text'].annotations || [], ...value],
+        };
+      } else {
+        prefixMap['text'] = {
+          id: generateId(),
+          role: 'assistant',
+          content: '',
+          annotations: [...value],
+          createdAt
         };
       }
     }

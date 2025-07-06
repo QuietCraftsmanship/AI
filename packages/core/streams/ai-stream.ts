@@ -42,7 +42,7 @@ export interface AIStreamCallbacks {
 
 export interface AIStreamCallbacksAndOptions extends AIStreamCallbacks {
   streamData?: Data
-=======
+
 export interface AIStreamCallbacksAndOptions {
   /** `onStart`: Called once when the stream is initialized. */
   onStart?: () => Promise<void> | void;
@@ -81,10 +81,14 @@ export interface AIStreamParserOptions {
  * @returns {string | void} The parsed data or void.
  */
 export interface AIStreamParser {
+
+  (data: string, options: AIStreamParserOptions): string | void;
+
   (data: string, options: AIStreamParserOptions):
     | string
     | void
     | { isText: false; content: string };
+
 }
 
 /**
@@ -124,8 +128,13 @@ export function createEventStreamTransformer(
 
             const parsedMessage = customParser
               ? customParser(event.data, {
+
+                event: event.event
+              })
+
                   event: event.event,
                 })
+
               : event.data;
             if (parsedMessage) controller.enqueue(parsedMessage);
 
