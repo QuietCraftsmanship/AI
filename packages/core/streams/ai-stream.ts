@@ -288,6 +288,29 @@ export function trimStartOfStreamHelper(): (text: string) => string {
  * @throws Will throw an error if the response is not OK.
  */
 export function AIStream(
+
+  res: Response,
+  customParser: AIStreamParser,
+  callbacks?: AIStreamCallbacks
+): ReadableStream {
+  // If the response is not OK, we want to throw an error to indicate that
+  // the AI service is not available.
+  // When catching this error, we can check the status code and return a handled
+  // error response to the client.
+  if (!res.ok) {
+    throw new Error(
+      `Failed to convert the response to stream. Received status code: ${res.status}.`
+    )
+  }
+
+  const stream =
+    res.body ||
+    new ReadableStream({
+      start(controller) {
+        controller.close()
+      }
+    })
+
   response: Response,
   customParser?: AIStreamParser,
   callbacks?: AIStreamCallbacksAndOptions,
@@ -314,6 +337,7 @@ export function AIStream(
   }
 
   const responseBodyStream = response.body || createEmptyReadableStream();
+
 
   return responseBodyStream
     .pipeThrough(createEventStreamTransformer(customParser))
