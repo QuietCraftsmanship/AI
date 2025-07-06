@@ -1,59 +1,67 @@
-import swrv from 'swrv'
-import { ref } from 'vue'
-import type { Ref } from 'vue'
-
+import swrv from 'swrv';
+import type { Ref } from 'vue';
+import { ref, unref } from 'vue';
+import { callChatApi } from '../shared/call-chat-api';
+import { processChatStream } from '../shared/process-chat-stream';
 import type {
-  Message,
+  ChatRequest,
+  ChatRequestOptions,
   CreateMessage,
+  JSONValue,
+  Message,
   UseChatOptions,
-  RequestOptions
-} from '../shared/types'
-import { createChunkDecoder, nanoid } from '../shared/utils'
+} from '../shared/types';
+import { nanoid } from '../shared/utils';
 
-export type { Message, CreateMessage, UseChatOptions }
+export type { CreateMessage, Message, UseChatOptions };
 
 export type UseChatHelpers = {
   /** Current messages in the chat */
-  messages: Ref<Message[]>
+  messages: Ref<Message[]>;
   /** The error object of the API request */
-  error: Ref<undefined | Error>
+  error: Ref<undefined | Error>;
   /**
    * Append a user message to the chat list. This triggers the API call to fetch
    * the assistant's response.
    */
   append: (
     message: Message | CreateMessage,
-    options?: RequestOptions
-  ) => Promise<string | null | undefined>
+    chatRequestOptions?: ChatRequestOptions,
+  ) => Promise<string | null | undefined>;
   /**
    * Reload the last AI chat response for the given chat history. If the last
    * message isn't from the assistant, it will request the API to generate a
    * new response.
    */
-  reload: (options?: RequestOptions) => Promise<string | null | undefined>
+  reload: (
+    chatRequestOptions?: ChatRequestOptions,
+  ) => Promise<string | null | undefined>;
   /**
    * Abort the current request immediately, keep the generated tokens if any.
    */
-  stop: () => void
+  stop: () => void;
   /**
    * Update the `messages` state locally. This is useful when you want to
    * edit the messages on the client, and then trigger the `reload` method
    * manually to regenerate the AI response.
    */
-  setMessages: (messages: Message[]) => void
+  setMessages: (messages: Message[]) => void;
   /** The current value of the input */
-  input: Ref<string>
-  /** Form submission handler to automattically reset input and append a user message  */
-  handleSubmit: (e: any) => void
+  input: Ref<string>;
+  /** Form submission handler to automatically reset input and append a user message  */
+  handleSubmit: (e: any, chatRequestOptions?: ChatRequestOptions) => void;
   /** Whether the API request is in progress */
-  isLoading: Ref<boolean>
-}
+  isLoading: Ref<boolean | undefined>;
 
-let uniqueId = 0
+  /** Additional data added on the server via StreamData */
+  data: Ref<JSONValue[] | undefined>;
+};
+
+let uniqueId = 0;
 
 // @ts-expect-error - some issues with the default export of useSWRV
-const useSWRV = (swrv.default as typeof import('swrv')['default']) || swrv
-const store: Record<string, Message[] | undefined> = {}
+const useSWRV = (swrv.default as typeof import('swrv')['default']) || swrv;
+const store: Record<string, Message[] | undefined> = {};
 
 export function useChat({
   api = '/api/chat',
@@ -61,191 +69,187 @@ export function useChat({
   initialMessages = [],
   initialInput = '',
   sendExtraMessageFields,
+  experimental_onFunctionCall,
   onResponse,
   onFinish,
   onError,
   credentials,
   headers,
-  body
+  body,
+  generateId = nanoid,
 }: UseChatOptions = {}): UseChatHelpers {
   // Generate a unique ID for the chat if not provided.
-  const chatId = id || `chat-${uniqueId++}`
+  const chatId = id || `chat-${uniqueId++}`;
 
-  const key = `${api}|${chatId}`
-  const { data, mutate: originalMutate } = useSWRV<Message[]>(
+  const key = `${api}|${chatId}`;
+  const { data: messagesData, mutate: originalMutate } = useSWRV<Message[]>(
     key,
-    () => store[key] || initialMessages
-  )
+    () => store[key] || initialMessages,
+  );
+
+  const { data: isLoading, mutate: mutateLoading } = useSWRV<boolean>(
+    `${chatId}-loading`,
+    null,
+  );
+
+  isLoading.value ??= false;
+
   // Force the `data` to be `initialMessages` if it's `undefined`.
-  data.value ||= initialMessages
+  messagesData.value ??= initialMessages;
 
   const mutate = (data?: Message[]) => {
-    store[key] = data
-    return originalMutate()
-  }
+    store[key] = data;
+    return originalMutate();
+  };
 
   // Because of the `initialData` option, the `data` will never be `undefined`.
-  const messages = data as Ref<Message[]>
+  const messages = messagesData as Ref<Message[]>;
 
-  const error = ref<undefined | Error>(undefined)
-  const isLoading = ref(false)
+  const error = ref<undefined | Error>(undefined);
+  // cannot use JSONValue[] in ref because of infinite Typescript recursion:
+  const streamData = ref<undefined | unknown[]>(undefined);
 
-  let abortController: AbortController | null = null
+  let abortController: AbortController | null = null;
   async function triggerRequest(
     messagesSnapshot: Message[],
-    options?: RequestOptions
+    { options, data }: ChatRequestOptions = {},
   ) {
     try {
-      isLoading.value = true
-      abortController = new AbortController()
+      error.value = undefined;
+      mutateLoading(() => true);
+
+      abortController = new AbortController();
 
       // Do an optimistic update to the chat state to show the updated messages
       // immediately.
-      const previousMessages = messages.value
-      mutate(messagesSnapshot)
+      const previousMessages = messagesData.value;
+      mutate(messagesSnapshot);
 
-      const res = await fetch(api, {
-        method: 'POST',
-        body: JSON.stringify({
-          messages: sendExtraMessageFields
-            ? messagesSnapshot
-            : messagesSnapshot.map(({ role, content }) => ({
-                role,
-                content
-              })),
-          ...body,
-          ...options?.body
-        }),
-        headers: {
-          ...headers,
-          ...options?.headers
+      let chatRequest: ChatRequest = {
+        messages: messagesSnapshot,
+        options,
+        data,
+      };
+
+      await processChatStream({
+        getStreamedResponse: async () => {
+          const existingData = (streamData.value ?? []) as JSONValue[];
+
+          return await callChatApi({
+            api,
+            messages: sendExtraMessageFields
+              ? chatRequest.messages
+              : chatRequest.messages.map(
+                  ({ role, content, name, function_call }) => ({
+                    role,
+                    content,
+                    ...(name !== undefined && { name }),
+                    ...(function_call !== undefined && {
+                      function_call: function_call,
+                    }),
+                  }),
+                ),
+            body: {
+              data: chatRequest.data,
+              ...unref(body), // Use unref to unwrap the ref value
+              ...options?.body,
+            },
+            headers: {
+              ...headers,
+              ...options?.headers,
+            },
+            abortController: () => abortController,
+            credentials,
+            onResponse,
+            onUpdate(merged, data) {
+              mutate([...chatRequest.messages, ...merged]);
+              streamData.value = [...existingData, ...(data ?? [])];
+            },
+            onFinish(message) {
+              // workaround: sometimes the last chunk is not shown in the UI.
+              // push it twice to make sure it's displayed.
+              mutate([...chatRequest.messages, message]);
+              onFinish?.(message);
+            },
+            appendMessage(message) {
+              mutate([...chatRequest.messages, message]);
+            },
+            restoreMessagesOnFailure() {
+              // Restore the previous messages if the request fails.
+              mutate(previousMessages);
+            },
+            generateId,
+          });
         },
-        signal: abortController.signal,
-        credentials
-      }).catch(err => {
-        // Restore the previous messages if the request fails.
-        mutate(previousMessages)
-        throw err
-      })
+        experimental_onFunctionCall,
+        updateChatRequest(newChatRequest) {
+          chatRequest = newChatRequest;
+        },
+        getCurrentMessages: () => messages.value,
+      });
 
-      if (onResponse) {
-        try {
-          await onResponse(res)
-        } catch (err) {
-          throw err
-        }
-      }
-
-      if (!res.ok) {
-        // Restore the previous messages if the request fails.
-        mutate(previousMessages)
-        throw new Error(
-          (await res.text()) || 'Failed to fetch the chat response.'
-        )
-      }
-      if (!res.body) {
-        throw new Error('The response body is empty.')
-      }
-
-      let result = ''
-      const createdAt = new Date()
-      const replyId = nanoid()
-      const reader = res.body.getReader()
-      const decoder = createChunkDecoder()
-
-      while (true) {
-        const { done, value } = await reader.read()
-        if (done) {
-          break
-        }
-        // Update the chat state with the new message tokens.
-        result += decoder(value)
-        mutate([
-          ...messagesSnapshot,
-          {
-            id: replyId,
-            createdAt,
-            content: result,
-            role: 'assistant'
-          }
-        ])
-
-        // The request has been aborted, stop reading the stream.
-        if (abortController === null) {
-          reader.cancel()
-          break
-        }
-      }
-
-      if (onFinish) {
-        onFinish({
-          id: replyId,
-          createdAt,
-          content: result,
-          role: 'assistant'
-        })
-      }
-
-      abortController = null
-      return result
+      abortController = null;
     } catch (err) {
       // Ignore abort errors as they are expected.
       if ((err as any).name === 'AbortError') {
-        abortController = null
-        return null
+        abortController = null;
+        return null;
       }
 
       if (onError && err instanceof Error) {
-        onError(err)
+        onError(err);
       }
 
-      error.value = err as Error
+      error.value = err as Error;
     } finally {
-      isLoading.value = false
+      mutateLoading(() => false);
     }
   }
 
   const append: UseChatHelpers['append'] = async (message, options) => {
     if (!message.id) {
-      message.id = nanoid()
+      message.id = generateId();
     }
-    return triggerRequest(messages.value.concat(message as Message), options)
-  }
+    return triggerRequest(messages.value.concat(message as Message), options);
+  };
 
   const reload: UseChatHelpers['reload'] = async options => {
-    const messagesSnapshot = messages.value
-    if (messagesSnapshot.length === 0) return null
+    const messagesSnapshot = messages.value;
+    if (messagesSnapshot.length === 0) return null;
 
-    const lastMessage = messagesSnapshot[messagesSnapshot.length - 1]
+    const lastMessage = messagesSnapshot[messagesSnapshot.length - 1];
     if (lastMessage.role === 'assistant') {
-      return triggerRequest(messagesSnapshot.slice(0, -1), options)
+      return triggerRequest(messagesSnapshot.slice(0, -1), options);
     }
-    return triggerRequest(messagesSnapshot, options)
-  }
+    return triggerRequest(messagesSnapshot, options);
+  };
 
   const stop = () => {
     if (abortController) {
-      abortController.abort()
-      abortController = null
+      abortController.abort();
+      abortController = null;
     }
-  }
+  };
 
   const setMessages = (messages: Message[]) => {
-    mutate(messages)
-  }
+    mutate(messages);
+  };
 
-  const input = ref(initialInput)
+  const input = ref(initialInput);
 
-  const handleSubmit = (e: any) => {
-    e.preventDefault()
-    const inputValue = input.value
-    if (!inputValue) return
-    append({
-      content: inputValue,
-      role: 'user'
-    })
-    input.value = ''
-  }
+  const handleSubmit = (e: any, options: ChatRequestOptions = {}) => {
+    e.preventDefault();
+    const inputValue = input.value;
+    if (!inputValue) return;
+    append(
+      {
+        content: inputValue,
+        role: 'user',
+      },
+      options,
+    );
+    input.value = '';
+  };
 
   return {
     messages,
@@ -256,6 +260,7 @@ export function useChat({
     setMessages,
     input,
     handleSubmit,
-    isLoading
-  }
+    isLoading,
+    data: streamData as Ref<undefined | JSONValue[]>,
+  };
 }

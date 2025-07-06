@@ -1,22 +1,24 @@
-import { Readable, get, writable, Writable } from 'svelte/store'
-import { useSWR } from 'sswr'
-import { nanoid, createChunkDecoder } from '../shared/utils'
-
+import { useSWR } from 'sswr';
+import { Readable, Writable, derived, get, writable } from 'svelte/store';
+import { callChatApi } from '../shared/call-chat-api';
+import { processChatStream } from '../shared/process-chat-stream';
 import type {
   ChatRequest,
+  ChatRequestOptions,
   CreateMessage,
+  IdGenerator,
+  JSONValue,
   Message,
   UseChatOptions,
-  ChatRequestOptions
-} from '../shared/types'
-import { ChatCompletionRequestMessageFunctionCall } from 'openai-edge'
-export type { Message, CreateMessage, UseChatOptions }
+} from '../shared/types';
+import { nanoid } from '../shared/utils';
+export type { CreateMessage, Message, UseChatOptions };
 
 export type UseChatHelpers = {
   /** Current messages in the chat */
-  messages: Readable<Message[]>
+  messages: Readable<Message[]>;
   /** The error object of the API request */
-  error: Readable<undefined | Error>
+  error: Readable<undefined | Error>;
   /**
    * Append a user message to the chat list. This triggers the API call to fetch
    * the assistant's response.
@@ -25,172 +27,120 @@ export type UseChatHelpers = {
    */
   append: (
     message: Message | CreateMessage,
-    chatRequestOptions?: ChatRequestOptions
-  ) => Promise<string | null | undefined>
+    chatRequestOptions?: ChatRequestOptions,
+  ) => Promise<string | null | undefined>;
   /**
    * Reload the last AI chat response for the given chat history. If the last
    * message isn't from the assistant, it will request the API to generate a
    * new response.
    */
   reload: (
-    chatRequestOptions?: ChatRequestOptions
-  ) => Promise<string | null | undefined>
+    chatRequestOptions?: ChatRequestOptions,
+  ) => Promise<string | null | undefined>;
   /**
    * Abort the current request immediately, keep the generated tokens if any.
    */
-  stop: () => void
+  stop: () => void;
   /**
    * Update the `messages` state locally. This is useful when you want to
    * edit the messages on the client, and then trigger the `reload` method
    * manually to regenerate the AI response.
    */
-  setMessages: (messages: Message[]) => void
+  setMessages: (messages: Message[]) => void;
   /** The current value of the input */
-  input: Writable<string>
-  /** Form submission handler to automattically reset input and append a user message  */
-  handleSubmit: (e: any, chatRequestOptions?: ChatRequestOptions) => void
-  metadata?: Object
+  input: Writable<string>;
+  /** Form submission handler to automatically reset input and append a user message  */
+  handleSubmit: (e: any, chatRequestOptions?: ChatRequestOptions) => void;
+  metadata?: Object;
   /** Whether the API request is in progress */
-  isLoading: Writable<boolean>
-}
+  isLoading: Readable<boolean | undefined>;
+
+  /** Additional data added on the server via StreamData */
+  data: Readable<JSONValue[] | undefined>;
+};
 const getStreamedResponse = async (
   api: string,
   chatRequest: ChatRequest,
   mutate: (messages: Message[]) => void,
+  mutateStreamData: (data: JSONValue[] | undefined) => void,
+  existingData: JSONValue[] | undefined,
   extraMetadata: {
-    credentials?: RequestCredentials
-    headers?: Record<string, string> | Headers
-    body?: any
+    credentials?: RequestCredentials;
+    headers?: Record<string, string> | Headers;
+    body?: any;
   },
   previousMessages: Message[],
   abortControllerRef: AbortController | null,
+  generateId: IdGenerator,
   onFinish?: (message: Message) => void,
   onResponse?: (response: Response) => void | Promise<void>,
-  sendExtraMessageFields?: boolean
+  sendExtraMessageFields?: boolean,
 ) => {
   // Do an optimistic update to the chat state to show the updated messages
   // immediately.
-  mutate(chatRequest.messages)
+  mutate(chatRequest.messages);
 
-  const res = await fetch(api, {
-    method: 'POST',
-    body: JSON.stringify({
-      messages: sendExtraMessageFields
-        ? chatRequest.messages
-        : chatRequest.messages.map(
-            ({ role, content, name, function_call }) => ({
-              role,
-              content,
-              ...(name !== undefined && { name }),
-              ...(function_call !== undefined && {
-                function_call: function_call
-              })
-            })
-          ),
+  const constructedMessagesPayload = sendExtraMessageFields
+    ? chatRequest.messages
+    : chatRequest.messages.map(
+        ({ role, content, name, function_call, tool_calls, tool_call_id }) => ({
+          role,
+          content,
+          tool_call_id,
+          ...(name !== undefined && { name }),
+          ...(function_call !== undefined && {
+            function_call: function_call,
+          }),
+          ...(tool_calls !== undefined && {
+            tool_calls: tool_calls,
+          }),
+        }),
+      );
+
+  return await callChatApi({
+    api,
+    messages: constructedMessagesPayload,
+    body: {
       ...extraMetadata.body,
       ...chatRequest.options?.body,
       ...(chatRequest.functions !== undefined && {
-        functions: chatRequest.functions
+        functions: chatRequest.functions,
       }),
       ...(chatRequest.function_call !== undefined && {
-        function_call: chatRequest.function_call
-      })
-    }),
+        function_call: chatRequest.function_call,
+      }),
+      ...(chatRequest.tools !== undefined && {
+        tools: chatRequest.tools,
+      }),
+      ...(chatRequest.tool_choice !== undefined && {
+        tool_choice: chatRequest.tool_choice,
+      }),
+    },
     credentials: extraMetadata.credentials,
     headers: {
       ...extraMetadata.headers,
-      ...chatRequest.options?.headers
+      ...chatRequest.options?.headers,
     },
-    ...(abortControllerRef !== null && {
-      signal: abortControllerRef.signal
-    })
-  }).catch(err => {
-    // Restore the previous messages if the request fails.
-    mutate(previousMessages)
-    throw err
-  })
+    abortController: () => abortControllerRef,
+    appendMessage(message) {
+      mutate([...chatRequest.messages, message]);
+    },
+    restoreMessagesOnFailure() {
+      mutate(previousMessages);
+    },
+    onResponse,
+    onUpdate(merged, data) {
+      mutate([...chatRequest.messages, ...merged]);
+      mutateStreamData([...(existingData || []), ...(data || [])]);
+    },
+    onFinish,
+    generateId,
+  });
+};
 
-  if (onResponse) {
-    try {
-      await onResponse(res)
-    } catch (err) {
-      throw err
-    }
-  }
+let uniqueId = 0;
 
-  if (!res.ok) {
-    // Restore the previous messages if the request fails.
-    mutate(previousMessages)
-    throw new Error((await res.text()) || 'Failed to fetch the chat response.')
-  }
-
-  if (!res.body) {
-    throw new Error('The response body is empty.')
-  }
-
-  let streamedResponse = ''
-  const createdAt = new Date()
-  const replyId = nanoid()
-  const reader = res.body.getReader()
-  const decode = createChunkDecoder()
-
-  let responseMessage: Message = {
-    id: replyId,
-    createdAt,
-    content: '',
-    role: 'assistant'
-  }
-
-  while (true) {
-    const { done, value } = await reader.read()
-    if (done) {
-      break
-    }
-    // Update the chat state with the new message tokens.
-    streamedResponse += decode(value)
-
-    // Check to see if there is a function, so we don't bother parsing if there isn't one.
-    const functionStart = streamedResponse.indexOf('{')
-    if (functionStart !== -1) {
-      const matches = /(.*?)(?:({"function_call".*?}})(.*))?$/gs.exec(
-        streamedResponse
-      )
-      responseMessage.content = `${matches?.[1] ?? ''}${matches?.[3] ?? ''}`
-      // While the function call is streaming, it will be a string.
-      responseMessage.function_call = matches?.[2]
-    } else {
-      responseMessage.content = streamedResponse
-    }
-
-    mutate([...chatRequest.messages, { ...responseMessage }])
-
-    // The request has been aborted, stop reading the stream.
-    if (abortControllerRef === null) {
-      reader.cancel()
-      break
-    }
-  }
-
-  if (typeof responseMessage.function_call === 'string') {
-    // Once the stream is complete, the function call is parsed into an object.
-    const parsedFunctionCall: ChatCompletionRequestMessageFunctionCall =
-      JSON.parse(responseMessage.function_call).function_call
-
-    responseMessage.function_call = parsedFunctionCall
-
-    mutate([...chatRequest.messages, { ...responseMessage }])
-  }
-
-  if (onFinish) {
-    onFinish(responseMessage)
-  }
-
-  return responseMessage
-}
-
-let uniqueId = 0
-
-const store: Record<string, Message[] | undefined> = {}
+const store: Record<string, Message[] | undefined> = {};
 
 export function useChat({
   api = '/api/chat',
@@ -199,186 +149,204 @@ export function useChat({
   initialInput = '',
   sendExtraMessageFields,
   experimental_onFunctionCall,
+  experimental_onToolCall,
   onResponse,
   onFinish,
   onError,
   credentials,
   headers,
-  body
+  body,
+  generateId = nanoid,
 }: UseChatOptions = {}): UseChatHelpers {
   // Generate a unique id for the chat if not provided.
-  const chatId = id || `chat-${uniqueId++}`
+  const chatId = id || `chat-${uniqueId++}`;
 
-  const key = `${api}|${chatId}`
-  const { data, mutate: originalMutate } = useSWR<Message[]>(key, {
+  const key = `${api}|${chatId}`;
+  const {
+    data,
+    mutate: originalMutate,
+    isLoading: isSWRLoading,
+  } = useSWR<Message[]>(key, {
     fetcher: () => store[key] || initialMessages,
-    fallbackData: initialMessages
-  })
+    fallbackData: initialMessages,
+  });
+
+  const streamData = writable<JSONValue[] | undefined>(undefined);
+
+  const loading = writable<boolean>(false);
+
   // Force the `data` to be `initialMessages` if it's `undefined`.
-  data.set(initialMessages)
+  data.set(initialMessages);
 
   const mutate = (data: Message[]) => {
-    store[key] = data
-    return originalMutate(data)
-  }
+    store[key] = data;
+    return originalMutate(data);
+  };
 
   // Because of the `fallbackData` option, the `data` will never be `undefined`.
-  const messages = data as Writable<Message[]>
+  const messages = data as Writable<Message[]>;
 
   // Abort controller to cancel the current API call.
-  let abortController: AbortController | null = null
+  let abortController: AbortController | null = null;
 
   const extraMetadata = {
     credentials,
     headers,
-    body
-  }
+    body,
+  };
 
-  const error = writable<undefined | Error>(undefined)
-  const isLoading = writable(false)
+  const error = writable<undefined | Error>(undefined);
 
   // Actual mutation hook to send messages to the API endpoint and update the
   // chat state.
   async function triggerRequest(chatRequest: ChatRequest) {
     try {
-      isLoading.set(true)
-      abortController = new AbortController()
+      error.set(undefined);
+      loading.set(true);
+      abortController = new AbortController();
 
-      while (true) {
-        const streamedResponseMessage = await getStreamedResponse(
-          api,
-          chatRequest,
-          mutate,
-          extraMetadata,
-          get(messages),
-          abortController,
-          onFinish,
-          onResponse,
-          sendExtraMessageFields
-        )
+      await processChatStream({
+        getStreamedResponse: () =>
+          getStreamedResponse(
+            api,
+            chatRequest,
+            mutate,
+            data => {
+              streamData.set(data);
+            },
+            get(streamData),
+            extraMetadata,
+            get(messages),
+            abortController,
+            generateId,
+            onFinish,
+            onResponse,
+            sendExtraMessageFields,
+          ),
+        experimental_onFunctionCall,
+        experimental_onToolCall,
+        updateChatRequest: chatRequestParam => {
+          chatRequest = chatRequestParam;
+        },
+        getCurrentMessages: () => get(messages),
+      });
 
-        if (
-          streamedResponseMessage.function_call === undefined ||
-          typeof streamedResponseMessage.function_call === 'string'
-        ) {
-          break
-        }
+      abortController = null;
 
-        // Streamed response is a function call, invoke the function call handler if it exists.
-        if (experimental_onFunctionCall) {
-          const functionCall = streamedResponseMessage.function_call
-
-          // User handles the function call in their own functionCallHandler.
-          // The "arguments" of the function call object will still be a string which will have to be parsed in the function handler.
-          // If the JSON is malformed due to model error the user will have to handle that themselves.
-
-          const functionCallResponse: ChatRequest | void =
-            await experimental_onFunctionCall(get(messages), functionCall)
-
-          // If the user does not return anything as a result of the function call, the loop will break.
-          if (functionCallResponse === undefined) break
-
-          // A function call response was returned.
-          // The updated chat with function call response will be sent to the API in the next iteration of the loop.
-          chatRequest = functionCallResponse
-        }
-      }
-
-      abortController = null
-
-      return null
+      return null;
     } catch (err) {
       // Ignore abort errors as they are expected.
       if ((err as any).name === 'AbortError') {
-        abortController = null
-        return null
+        abortController = null;
+        return null;
       }
 
       if (onError && err instanceof Error) {
-        onError(err)
+        onError(err);
       }
 
-      error.set(err as Error)
+      error.set(err as Error);
     } finally {
-      isLoading.set(false)
+      loading.set(false);
     }
   }
 
   const append: UseChatHelpers['append'] = async (
     message: Message | CreateMessage,
-    { options, functions, function_call }: ChatRequestOptions = {}
+    {
+      options,
+      functions,
+      function_call,
+      tools,
+      tool_choice,
+    }: ChatRequestOptions = {},
   ) => {
     if (!message.id) {
-      message.id = nanoid()
+      message.id = generateId();
     }
 
     const chatRequest: ChatRequest = {
       messages: get(messages).concat(message as Message),
       options,
       ...(functions !== undefined && { functions }),
-      ...(function_call !== undefined && { function_call })
-    }
-    return triggerRequest(chatRequest)
-  }
+      ...(function_call !== undefined && { function_call }),
+      ...(tools !== undefined && { tools }),
+      ...(tool_choice !== undefined && { tool_choice }),
+    };
+    return triggerRequest(chatRequest);
+  };
 
   const reload: UseChatHelpers['reload'] = async ({
     options,
     functions,
-    function_call
+    function_call,
+    tools,
+    tool_choice,
   }: ChatRequestOptions = {}) => {
-    const messagesSnapshot = get(messages)
-    if (messagesSnapshot.length === 0) return null
+    const messagesSnapshot = get(messages);
+    if (messagesSnapshot.length === 0) return null;
 
     // Remove last assistant message and retry last user message.
-    const lastMessage = messagesSnapshot.at(-1)
+    const lastMessage = messagesSnapshot.at(-1);
     if (lastMessage?.role === 'assistant') {
       const chatRequest: ChatRequest = {
         messages: messagesSnapshot.slice(0, -1),
         options,
         ...(functions !== undefined && { functions }),
-        ...(function_call !== undefined && { function_call })
-      }
+        ...(function_call !== undefined && { function_call }),
+        ...(tools !== undefined && { tools }),
+        ...(tool_choice !== undefined && { tool_choice }),
+      };
 
-      return triggerRequest(chatRequest)
+      return triggerRequest(chatRequest);
     }
     const chatRequest: ChatRequest = {
       messages: messagesSnapshot,
       options,
       ...(functions !== undefined && { functions }),
-      ...(function_call !== undefined && { function_call })
-    }
+      ...(function_call !== undefined && { function_call }),
+      ...(tools !== undefined && { tools }),
+      ...(tool_choice !== undefined && { tool_choice }),
+    };
 
-    return triggerRequest(chatRequest)
-  }
+    return triggerRequest(chatRequest);
+  };
 
   const stop = () => {
     if (abortController) {
-      abortController.abort()
-      abortController = null
+      abortController.abort();
+      abortController = null;
     }
-  }
+  };
 
   const setMessages = (messages: Message[]) => {
-    mutate(messages)
-  }
+    mutate(messages);
+  };
 
-  const input = writable(initialInput)
+  const input = writable(initialInput);
 
   const handleSubmit = (e: any, options: ChatRequestOptions = {}) => {
-    e.preventDefault()
-    const inputValue = get(input)
-    if (!inputValue) return
+    e.preventDefault();
+    const inputValue = get(input);
+    if (!inputValue) return;
 
     append(
       {
         content: inputValue,
         role: 'user',
-        createdAt: new Date()
+        createdAt: new Date(),
       },
-      options
-    )
-    input.set('')
-  }
+      options,
+    );
+    input.set('');
+  };
+
+  const isLoading = derived(
+    [isSWRLoading, loading],
+    ([$isSWRLoading, $loading]) => {
+      return $isSWRLoading || $loading;
+    },
+  );
 
   return {
     messages,
@@ -389,6 +357,7 @@ export function useChat({
     setMessages,
     input,
     handleSubmit,
-    isLoading
-  }
+    isLoading,
+    data: streamData,
+  };
 }

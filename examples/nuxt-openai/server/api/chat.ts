@@ -1,43 +1,31 @@
-// ./api/chat.ts
-import { Configuration, OpenAIApi } from 'openai-edge'
-import { OpenAIStream, streamToResponse } from 'ai'
+import { OpenAIStream, StreamingTextResponse } from 'ai';
+import OpenAI from 'openai';
+import { ChatCompletionMessageParam } from 'openai/resources/chat';
 
-// Create an OpenAI API client (that's edge friendly!)
-const config = new Configuration({
-  // eslint-disable-next-line react-hooks/rules-of-hooks
-  apiKey: useRuntimeConfig().openaiApiKey
-})
-const openai = new OpenAIApi(config)
+export default defineLazyEventHandler(async () => {
+  const apiKey = useRuntimeConfig().openaiApiKey;
+  if (!apiKey) throw new Error('Missing OpenAI API key');
+  const openai = new OpenAI({
+    apiKey: apiKey,
+  });
 
-export default defineEventHandler(async (event: any) => {
-  // Extract the `prompt` from the body of the request
-  const { messages } = await readBody(event)
+  return defineEventHandler(async (event: any) => {
+    // Extract the `prompt` from the body of the request
+    const { messages } = (await readBody(event)) as {
+      messages: ChatCompletionMessageParam[];
+    };
 
-  // Ask OpenAI for a streaming chat completion given the prompt
-  const response = await openai.createChatCompletion({
-    model: 'gpt-3.5-turbo',
-    stream: true,
-    messages: messages.map((message: any) => ({
-      content: message.content,
-      role: message.role
-    }))
-  })
+    // Ask OpenAI for a streaming chat completion given the prompt
+    const response = await openai.chat.completions.create({
+      model: 'gpt-3.5-turbo',
+      stream: true,
+      messages,
+    });
 
-  // Convert the response into a friendly text-stream
-  const stream = OpenAIStream(response)
-  // Respond with the stream
-  const reader = stream.getReader()
-  return new Promise((resolve, reject) => {
-    function read() {
-      reader.read().then(({ done, value }) => {
-        if (done) {
-          event.node.res.end()
-          return
-        }
-        event.node.res.write(value)
-        read()
-      })
-    }
-    read()
-  })
-})
+    // Convert the response into a friendly text-stream
+    const stream = OpenAIStream(response);
+
+    // Respond with the stream
+    return new StreamingTextResponse(stream);
+  });
+});

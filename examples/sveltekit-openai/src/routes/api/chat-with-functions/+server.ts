@@ -1,15 +1,17 @@
-import { Configuration, OpenAIApi } from 'openai-edge'
-import { OpenAIStream, StreamingTextResponse } from 'ai'
-import type { ChatCompletionFunctions } from 'openai-edge/types/api'
+import OpenAI from 'openai';
+import {
+  OpenAIStream,
+  StreamingTextResponse,
+  experimental_StreamData,
+} from 'ai';
+import { env } from '$env/dynamic/private';
+import type { ChatCompletionCreateParams } from 'openai/resources/chat';
 
-import { env } from '$env/dynamic/private'
+const openai = new OpenAI({
+  apiKey: env.OPENAI_API_KEY || '',
+});
 
-const config = new Configuration({
-  apiKey: env.OPENAI_API_KEY
-})
-const openai = new OpenAIApi(config)
-
-const functions: ChatCompletionFunctions[] = [
+const functions: ChatCompletionCreateParams.Function[] = [
   {
     name: 'get_current_weather',
     description: 'Get the current weather',
@@ -18,26 +20,17 @@ const functions: ChatCompletionFunctions[] = [
       properties: {
         location: {
           type: 'string',
-          description: 'The city and state, e.g. San Francisco, CA'
+          description: 'The city and state, e.g. San Francisco, CA',
         },
         format: {
           type: 'string',
           enum: ['celsius', 'fahrenheit'],
           description:
-            'The temperature unit to use. Infer this from the users location.'
-        }
+            'The temperature unit to use. Infer this from the users location.',
+        },
       },
-      required: ['location', 'format']
-    }
-  },
-  {
-    name: 'get_current_time',
-    description: 'Get the current time',
-    parameters: {
-      type: 'object',
-      properties: {},
-      required: []
-    }
+      required: ['location', 'format'],
+    },
   },
   {
     name: 'eval_code_in_browser',
@@ -49,25 +42,58 @@ const functions: ChatCompletionFunctions[] = [
           type: 'string',
           description: `Javascript code that will be directly executed via eval(). Do not use backticks in your response.
            DO NOT include any newlines in your response, and be sure to provide only valid JSON when providing the arguments object.
-           The output of the eval() will be returned directly by the function.`
-        }
+           The output of the eval() will be returned directly by the function.`,
+        },
       },
-      required: ['code']
-    }
-  }
-]
+      required: ['code'],
+    },
+  },
+];
 
 export async function POST({ request }) {
-  const { messages, function_call } = await request.json()
+  const { messages } = await request.json();
 
-  const response = await openai.createChatCompletion({
+  const response = await openai.chat.completions.create({
     model: 'gpt-3.5-turbo-0613',
     stream: true,
     messages,
     functions,
-    function_call
-  })
+  });
 
-  const stream = OpenAIStream(response)
-  return new StreamingTextResponse(stream)
+  const data = new experimental_StreamData();
+  const stream = OpenAIStream(response, {
+    experimental_onFunctionCall: async (
+      { name, arguments: args },
+      createFunctionCallMessages,
+    ) => {
+      if (name === 'get_current_weather') {
+        // Call a weather API here
+        const weatherData = {
+          temperature: 20,
+          unit: args.format === 'celsius' ? 'C' : 'F',
+        };
+
+        const newMessages = createFunctionCallMessages(weatherData);
+
+        return openai.chat.completions.create({
+          messages: [...messages, ...newMessages],
+          stream: true,
+          model: 'gpt-3.5-turbo-0613',
+        });
+      }
+    },
+    onCompletion(completion) {
+      console.log('completion', completion);
+    },
+    onFinal(completion) {
+      data.close();
+    },
+    experimental_streamData: true,
+  });
+
+  data.append({
+    text: 'Hello, how are you?',
+  });
+
+  return new StreamingTextResponse(stream, {}, data);
 }
