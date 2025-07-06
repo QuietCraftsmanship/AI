@@ -175,6 +175,19 @@ export function createCallbacksTransformer(
   });
 }
 
+// If we're still at the start of the stream, we want to trim the leading
+// `\n\n`. But, after we've seen some text, we no longer want to trim out
+// whitespace.
+export function trimStartOfStreamHelper() {
+  let start = true
+  return (text: string) => {
+    let trimmedText = text
+    if (start) {
+      trimmedText = text.trimStart()
+      start = trimmedText.length > 0
+    }
+    return trimmedText
+  }
 function isOfTypeOpenAIStreamCallbacks(
   callbacks: AIStreamCallbacksAndOptions | OpenAIStreamCallbacks,
 ): callbacks is OpenAIStreamCallbacks {
